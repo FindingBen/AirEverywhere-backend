@@ -12,7 +12,7 @@ if (!uri) {
 const client = new MongoClient(uri, {
   serverApi: {
     version: ServerApiVersion.v1,
-    strict: true,
+    //strict: true,
     tls: true,
     deprecationErrors: true,
   },
