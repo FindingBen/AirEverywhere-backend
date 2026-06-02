@@ -1,29 +1,45 @@
 const { connectToMongoDB } = require("./database");
+const { ObjectId } = require("mongodb");
 
 const express = require("express");
 const path = require("path");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
-const port = 5000;
+const port = 5001;
 const app = express();
 
 app.use(express.json());
-cors({
+app.use(cors({
   origin: "*", // Allow all origins (adjust for production as needed)
-});
+}));
+
+let db; // Declare db at module level
 
 connectToMongoDB().then((client) => {
-  db = client.db("Airdrop"); // Replace with your database name
+  db = client.db("AirDrop");
   console.log("MongoDB connection established for Express app.");
+  
+  // Start server only after MongoDB is connected
+  app.listen(port, () => {
+    console.log(`Server running on Port:${port}`);
+  });
+}).catch((error) => {
+  console.error("Failed to connect to MongoDB:", error);
+  process.exit(1);
 });
 
 app.post("/register", async (req, res) => {
   try {
-    console.log(req.body);
-    const { email, password } = req.body;
+    const { email, password, username } = req.body;
     if (!email || !password) {
       return res.status(400).json({ error: "All fields are required." });
+    }
+
+    // Validate email format
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: "Please provide a valid email address." });
     }
 
     // Check if user already exists
@@ -38,6 +54,8 @@ app.post("/register", async (req, res) => {
     // Create new user
     const newUser = {
       email: email,
+      username: username,
+      contributionPoints: 0,
       password: hashedPassword,
     };
     const result = await db.collection("Users").insertOne(newUser);
@@ -104,7 +122,7 @@ app.get("/markers", async (req, res) => {
         id: marker._id.toString(), // Convert ObjectId to string
       }))
       .toArray();
-    console.log("AA", markers);
+    
     res.json(markers);
   } catch (error) {
     console.error("Error fetching markers:", error);
@@ -125,6 +143,8 @@ app.post("/markers", async (req, res) => {
       longitude,
       name,
       status,
+      positive: 0,
+      negative: 0
     };
     const result = await markersCollection.insertOne(newMarker);
     res.json({ message: "Marker added successfully!", id: result.insertedId });
@@ -134,10 +154,81 @@ app.post("/markers", async (req, res) => {
   }
 });
 
-app.get("/", (req, res) => {
-  res.send("Yo from API!");
+app.post("/vote", async (req, res) => {
+  try {
+    const voteCollection = db.collection("Votes");
+    const { userId, markerId, voteType, pointsAwarded } = req.body;
+
+    // Validate all required fields
+    if (!userId || !markerId || !voteType || pointsAwarded === undefined) {
+      return res.status(400).json({ error: "All fields required!" });
+    }
+    console.log(req.body)
+    // Convert string IDs to ObjectId for database queries
+    const userObjectId = new ObjectId(userId);
+    const markerObjectId = new ObjectId(markerId);
+
+    const voteObject = {
+      userId: userObjectId,
+      markerId: markerObjectId,
+      voteType,
+      pointsAwarded,
+      timestamp: new Date()
+    };
+
+    const result = await voteCollection.insertOne(voteObject);
+    
+    // Update marker feedback counts
+    const markersCollection = db.collection("Markers");
+    const updateField = voteType === "upvote" ? "positive" : "negative";
+    await markersCollection.updateOne(
+      { _id: markerObjectId },
+      { $inc: { [updateField]: 1 } }
+    );
+    
+    // Update user contribution points
+const usersCollection = db.collection("Users");
+const userUpdateResult = await usersCollection.updateOne(
+  { _id: userObjectId },
+  { $inc: { contributionPoints: pointsAwarded } }  // ← Use pointsAwarded instead of 5
+);
+    
+    console.log("User update result:", userUpdateResult);
+    console.log("Updated userId:", userObjectId.toString());
+    
+    res.json({ message: "Thank you for the feedback!", id: result.insertedId });
+
+  } catch (error) {
+    console.error("Error adding vote:", error.message, error.code);
+    console.error("Full error object:", error);
+    
+    // Check for duplicate key error (user already voted on this pump)
+    if (error.code === 11000 || error.message.includes("E11000")) {
+      console.log("Duplicate key detected, sending 409 response");
+      return res.status(409).json({ 
+        error: "You already gave your feedback on this pump. You can vote again in a week if the pump's status changes." 
+      });
+    }
+    
+    console.log("Sending 500 error response");
+    res.status(500).json({ error: "An error occurred while sending your feedback." });
+  }
 });
 
-app.listen(port, () => {
-  console.log(`Server running on Port:${port}`);
+app.get("/users", async (req, res) => {
+  try {
+    const users = await db.collection("Users")
+      .find({})
+      .project({ username: 1, contributionPoints: 1 })
+      .toArray();
+    
+    res.json(users);
+  } catch (error) {
+    console.error("Error fetching users:", error);
+    res.status(500).json({ error: "An error occurred while fetching users." });
+  }
+});
+
+app.get("/", (req, res) => {
+  res.send("Yo from API!");
 });

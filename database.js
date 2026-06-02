@@ -8,20 +8,28 @@ if (!uri) {
   process.exit(1);
 }
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    //strict: true,
-    tls: true,
-    deprecationErrors: true,
-  },
-});
+const isAtlas = uri.startsWith("mongodb+srv://");
+
+// Atlas benefits from serverApi options; local MongoDB should not force TLS.
+const client = new MongoClient(
+  uri,
+  isAtlas
+    ? {
+        serverApi: {
+          version: ServerApiVersion.v1,
+          deprecationErrors: true,
+        },
+      }
+    : {}
+);
 
 async function connectToMongoDB() {
   try {
     await client.connect();
     console.log("Successfully connected to MongoDB!");
+    const db = client.db("AirDrop");
+    await db.collection("Votes").createIndex({ userId: 1, markerId: 1 }, { unique: true });
+    console.log("Votes unique index created on userId + markerId");
     return client; // Return the connected client
   } catch (error) {
     console.error("Failed to connect to MongoDB:", error);
