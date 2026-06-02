@@ -124,6 +124,7 @@ app.get("/markers", async (req, res) => {
       .toArray();
     
     res.json(markers);
+    console.log('Request made for marker',req)
   } catch (error) {
     console.error("Error fetching markers:", error);
     res.status(500).send("An error occurred while fetching markers.");
@@ -163,7 +164,7 @@ app.post("/vote", async (req, res) => {
     if (!userId || !markerId || !voteType || pointsAwarded === undefined) {
       return res.status(400).json({ error: "All fields required!" });
     }
-    console.log(req.body)
+    
     // Convert string IDs to ObjectId for database queries
     const userObjectId = new ObjectId(userId);
     const markerObjectId = new ObjectId(markerId);
