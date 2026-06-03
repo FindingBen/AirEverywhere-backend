@@ -27,7 +27,7 @@ async function connectToMongoDB() {
   try {
     await client.connect();
     console.log("Successfully connected to MongoDB!");
-    const db = client.db("Airdrop");
+    const db = client.db("AirDrop");
     await db.collection("Votes").createIndex({ userId: 1, markerId: 1 }, { unique: true });
     console.log("Votes unique index created on userId + markerId");
     return client; // Return the connected client
