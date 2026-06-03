@@ -6,7 +6,7 @@ const path = require("path");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
-const port = 5001;
+const port = process.env.PORT || 5001;
 const app = express();
 
 app.use(express.json());
