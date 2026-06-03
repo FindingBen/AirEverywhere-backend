@@ -59,6 +59,7 @@ app.post("/register", async (req, res) => {
       password: hashedPassword,
     };
     const result = await db.collection("Users").insertOne(newUser);
+    console.log('REGISTERED!')
     res.json({ message: "User registered successfully!" });
   } catch (error) {
     console.error("Error registering user:", error);
@@ -124,7 +125,7 @@ app.get("/markers", async (req, res) => {
       .toArray();
     
     res.json(markers);
-    console.log('Request made for marker',req)
+    console.log('request made!')
   } catch (error) {
     console.error("Error fetching markers:", error);
     res.status(500).send("An error occurred while fetching markers.");
