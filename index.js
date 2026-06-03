@@ -17,7 +17,7 @@ app.use(cors({
 let db; // Declare db at module level
 
 connectToMongoDB().then((client) => {
-  db = client.db("AirDrop");
+  db = client.db("Airdrop");
   console.log("MongoDB connection established for Express app.");
   
   // Start server only after MongoDB is connected
