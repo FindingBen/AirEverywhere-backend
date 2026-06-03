@@ -21,7 +21,7 @@ connectToMongoDB().then((client) => {
   console.log("MongoDB connection established for Express app.");
   
   // Start server only after MongoDB is connected
-  app.listen(port,'0.0.0.0', () => {
+  app.listen(port, () => {
     console.log(`Server running on Port:${port}`);
   });
 }).catch((error) => {
