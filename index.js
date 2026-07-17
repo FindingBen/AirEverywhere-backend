@@ -312,6 +312,18 @@ app.post("/vote", async (req, res) => {
     const userObjectId = new ObjectId(userId);
     const markerObjectId = new ObjectId(markerId);
 
+    const existingVote = await voteCollection.findOne({
+      userId: userObjectId,
+      markerId: markerObjectId,
+    });
+
+    if (existingVote) {
+      return res.status(409).json({
+        error: "You already gave feedback on this pump.",
+        existingVoteType: existingVote.voteType,
+      });
+    }
+
     const voteObject = {
       userId: userObjectId,
       markerId: markerObjectId,
@@ -343,16 +355,14 @@ const userUpdateResult = await usersCollection.updateOne(
     res.json({ message: "Thank you for the feedback!", id: result.insertedId });
 
   } catch (error) {
-    console.error("Error adding vote:", error.message, error.code);
-    console.error("Full error object:", error);
-    
-    // Check for duplicate key error (user already voted on this pump)
     if (error.code === 11000 || error.message.includes("E11000")) {
-      console.log("Duplicate key detected, sending 409 response");
       return res.status(409).json({ 
-        error: "You already gave your feedback on this pump. You can vote again in a week if the pump's status changes." 
+        error: "You already gave feedback on this pump." 
       });
     }
+
+    console.error("Error adding vote:", error.message, error.code);
+    console.error("Full error object:", error);
     
     console.log("Sending 500 error response");
     res.status(500).json({ error: "An error occurred while sending your feedback." });
