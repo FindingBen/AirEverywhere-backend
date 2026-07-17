@@ -28,6 +28,7 @@ async function connectToMongoDB() {
   try {
     await client.connect();
     console.log("Successfully connected to MongoDB!");
+    console.log(`Using MongoDB database: ${dbName}`);
     const db = client.db(dbName);
     await db.collection("Users").createIndex(
       { installId: 1 },

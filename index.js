@@ -58,6 +58,7 @@ const createAnonymousUser = async (usersCollection, installId) => {
 connectToMongoDB().then((client) => {
   db = client.db(dbName);
   console.log("MongoDB connection established for Express app.");
+  console.log(`Express app using database: ${dbName}`);
   
   // Start server only after MongoDB is connected
   app.listen(port, () => {
@@ -374,4 +375,23 @@ app.get("/users", async (req, res) => {
 
 app.get("/", (req, res) => {
   res.send("Yo from API!");
+});
+
+app.get("/health", async (req, res) => {
+  try {
+    await db.command({ ping: 1 });
+
+    res.json({
+      ok: true,
+      database: dbName,
+      message: "MongoDB connection is healthy.",
+    });
+  } catch (error) {
+    console.error("Health check failed:", error);
+    res.status(500).json({
+      ok: false,
+      database: dbName,
+      error: "MongoDB ping failed.",
+    });
+  }
 });
