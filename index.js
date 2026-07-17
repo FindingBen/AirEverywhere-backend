@@ -1,4 +1,4 @@
-const { connectToMongoDB } = require("./database");
+const { connectToMongoDB, dbName } = require("./database");
 const { ObjectId } = require("mongodb");
 
 const express = require("express");
@@ -7,6 +7,8 @@ const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
 const port = process.env.PORT || 5001;
+const jwtSecret = process.env.JWT_SECRET || "your_jwt_secret";
+const jwtExpiresIn = "30d";
 const app = express();
 
 app.use(express.json());
@@ -16,8 +18,45 @@ app.use(cors({
 
 let db; // Declare db at module level
 
+const createAuthToken = (userId) =>
+  jwt.sign({ userId: userId.toString() }, jwtSecret, {
+    expiresIn: jwtExpiresIn,
+  });
+
+const generateAnonymousUsername = () => `user${Math.floor(100000 + Math.random() * 900000)}`;
+
+const createAnonymousUser = async (usersCollection, installId) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const username = generateAnonymousUsername();
+    const existingUsername = await usersCollection.findOne({ username });
+
+    if (existingUsername) {
+      continue;
+    }
+
+    const now = new Date();
+    const newUser = {
+      username,
+      installId,
+      isAnonymous: true,
+      contributionPoints: 0,
+      createdAt: now,
+      lastSeenAt: now,
+    };
+
+    const result = await usersCollection.insertOne(newUser);
+
+    return {
+      ...newUser,
+      _id: result.insertedId,
+    };
+  }
+
+  throw new Error("Failed to generate anonymous username.");
+};
+
 connectToMongoDB().then((client) => {
-  db = client.db("Airdrop");
+  db = client.db(dbName);
   console.log("MongoDB connection established for Express app.");
   
   // Start server only after MongoDB is connected
@@ -87,14 +126,55 @@ app.post("/login", async (req, res) => {
     }
 
     // Create JWT token
-    const token = jwt.sign({ userId: user._id }, "your_jwt_secret", {
-      expiresIn: "1h",
-    });
+    const token = createAuthToken(user._id);
 
-    res.json({ message: "Login successful", token });
+    res.json({
+      message: "Login successful",
+      token,
+      userId: user._id.toString(),
+      username: user.username,
+      isAnonymous: Boolean(user.isAnonymous),
+    });
   } catch (error) {
     console.error("Error logging in user:", error);
     res.status(500).send("An error occurred while logging in.");
+  }
+});
+
+app.post("/auth/anonymous", async (req, res) => {
+  try {
+    const { installId } = req.body;
+
+    if (!installId) {
+      return res.status(400).json({ error: "installId is required." });
+    }
+
+    const usersCollection = db.collection("Users");
+    let user = await usersCollection.findOne({ installId, isAnonymous: true });
+
+    if (!user) {
+      user = await createAnonymousUser(usersCollection, installId);
+    } else {
+      await usersCollection.updateOne(
+        { _id: user._id },
+        { $set: { lastSeenAt: new Date() } }
+      );
+
+      user.lastSeenAt = new Date();
+    }
+
+    const token = createAuthToken(user._id);
+
+    res.json({
+      message: "Anonymous user ready",
+      token,
+      userId: user._id.toString(),
+      username: user.username,
+      isAnonymous: true,
+    });
+  } catch (error) {
+    console.error("Error creating anonymous user:", error);
+    res.status(500).json({ error: "An error occurred while creating anonymous user." });
   }
 });
 
@@ -104,7 +184,7 @@ const verifyToken = (req, res, next) => {
     return res.status(403).json({ error: "No token provided." });
   }
 
-  jwt.verify(token, "your_jwt_secret", (err, decoded) => {
+  jwt.verify(token, jwtSecret, (err, decoded) => {
     if (err) {
       return res.status(403).json({ error: "Invalid or expired token." });
     }
@@ -113,14 +193,66 @@ const verifyToken = (req, res, next) => {
   });
 };
 
+const getRequestUserId = (req) => {
+  const token = req.headers["authorization"]?.split(" ")[1];
+
+  if (!token) {
+    return req.body?.userId || req.query?.userId;
+  }
+
+  try {
+    const decoded = jwt.verify(token, jwtSecret);
+    return decoded.userId;
+  } catch (error) {
+    return null;
+  }
+};
+
+app.get("/me", async (req, res) => {
+  try {
+    const userId = getRequestUserId(req);
+
+    if (!userId || !ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: "Valid user id or token is required." });
+    }
+
+    const user = await db.collection("Users").findOne(
+      { _id: new ObjectId(userId) },
+      {
+        projection: {
+          username: 1,
+          contributionPoints: 1,
+          isAnonymous: 1,
+          email: 1,
+        },
+      }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    res.json({
+      userId: user._id.toString(),
+      username: user.username,
+      contributionPoints: user.contributionPoints || 0,
+      isAnonymous: Boolean(user.isAnonymous),
+      email: user.email || null,
+    });
+  } catch (error) {
+    console.error("Error fetching current user:", error);
+    res.status(500).json({ error: "An error occurred while fetching the user." });
+  }
+});
+
 app.get("/markers", async (req, res) => {
   try {
-    const markersCollection = db.collection("Markers"); // Replace with your collection name
+    const markersCollection = db.collection("Markers");
     const markers = await markersCollection
       .find({})
       .map((marker) => ({
         ...marker,
-        id: marker._id.toString(), // Convert ObjectId to string
+        _id: marker._id.toString(), // Return _id as string
       }))
       .toArray();
     
@@ -159,11 +291,20 @@ app.post("/markers", async (req, res) => {
 app.post("/vote", async (req, res) => {
   try {
     const voteCollection = db.collection("Votes");
-    const { userId, markerId, voteType, pointsAwarded } = req.body;
+    const { markerId, voteType, pointsAwarded } = req.body;
+    const userId = getRequestUserId(req);
 
     // Validate all required fields
     if (!userId || !markerId || !voteType || pointsAwarded === undefined) {
       return res.status(400).json({ error: "All fields required!" });
+    }
+
+    if (!ObjectId.isValid(userId) || !ObjectId.isValid(markerId)) {
+      return res.status(400).json({ error: "Invalid user or marker id." });
+    }
+
+    if (!["upvote", "downvote"].includes(voteType)) {
+      return res.status(400).json({ error: "Invalid vote type." });
     }
     
     // Convert string IDs to ObjectId for database queries
