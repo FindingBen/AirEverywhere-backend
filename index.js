@@ -246,6 +246,60 @@ app.get("/me", async (req, res) => {
   }
 });
 
+app.post("/reviews", async (req, res) => {
+  try {
+    const userId = getRequestUserId(req);
+    const { text } = req.body;
+
+    if (!userId || !ObjectId.isValid(userId)) {
+      return res.status(400).json({ error: "Valid user id or token is required." });
+    }
+
+    if (typeof text !== "string") {
+      return res.status(400).json({ error: "Review text is required." });
+    }
+
+    const trimmedText = text.trim();
+
+    if (!trimmedText) {
+      return res.status(400).json({ error: "Review text is required." });
+    }
+
+    if (trimmedText.length > 500) {
+      return res.status(400).json({ error: "Review must be 500 characters or less." });
+    }
+
+    const userObjectId = new ObjectId(userId);
+    const user = await db.collection("Users").findOne(
+      { _id: userObjectId },
+      { projection: { username: 1, isAnonymous: 1, email: 1 } }
+    );
+
+    if (!user) {
+      return res.status(404).json({ error: "User not found." });
+    }
+
+    const review = {
+      userId: userObjectId,
+      username: user.username,
+      isAnonymous: Boolean(user.isAnonymous),
+      email: user.email || null,
+      text: trimmedText,
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection("Reviews").insertOne(review);
+
+    res.status(201).json({
+      message: "Review submitted successfully.",
+      reviewId: result.insertedId.toString(),
+    });
+  } catch (error) {
+    console.error("Error creating review:", error);
+    res.status(500).json({ error: "An error occurred while submitting the review." });
+  }
+});
+
 app.get("/markers", async (req, res) => {
   try {
     const markersCollection = db.collection("Markers");

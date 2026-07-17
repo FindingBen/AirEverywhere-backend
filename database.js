@@ -40,6 +40,8 @@ async function connectToMongoDB() {
     console.log("Users installId index created");
     await db.collection("Votes").createIndex({ userId: 1, markerId: 1 }, { unique: true });
     console.log("Votes unique index created on userId + markerId");
+    await db.collection("Reviews").createIndex({ userId: 1, createdAt: -1 });
+    console.log("Reviews index created on userId + createdAt");
     return client; // Return the connected client
   } catch (error) {
     console.error("Failed to connect to MongoDB:", error);
