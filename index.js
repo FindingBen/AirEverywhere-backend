@@ -6,9 +6,13 @@ const path = require("path");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
+const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const port = process.env.PORT || 5001;
 const jwtSecret = process.env.JWT_SECRET || "your_jwt_secret";
 const jwtExpiresIn = "30d";
+const s3Bucket = process.env.S3_BUCKET || "erforus-pump-location-raw";
+const awsRegion = process.env.AWS_REGION || "us-east-1";
+const s3Client = new S3Client({ region: awsRegion });
 const app = express();
 
 app.use(express.json());
@@ -340,6 +344,79 @@ app.post("/markers", async (req, res) => {
   } catch (error) {
     console.error("Error adding marker:", error);
     res.status(500).send("An error occurred while adding the marker.");
+  }
+});
+
+app.post(
+  "/markers/:markerId/image",
+  verifyToken,
+  express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "10mb" }),
+  async (req, res) => {
+    try {
+      const { markerId } = req.params;
+      const contentType = req.headers["content-type"];
+
+      if (!ObjectId.isValid(markerId)) {
+        return res.status(400).json({ error: "Invalid marker id." });
+      }
+
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: "An image file is required." });
+      }
+
+      const markerObjectId = new ObjectId(markerId);
+      const markersCollection = db.collection("Markers");
+      const marker = await markersCollection.findOne({ _id: markerObjectId });
+
+      if (!marker) {
+        return res.status(404).json({ error: "Pump not found." });
+      }
+
+      const key = `markers/${markerId}/pump-image`;
+      await s3Client.send(new PutObjectCommand({
+        Bucket: s3Bucket,
+        Key: key,
+        Body: req.body,
+        ContentType: contentType,
+      }));
+
+      const imageUrl = `/markers/${markerId}/image`;
+      await markersCollection.updateOne(
+        { _id: markerObjectId },
+        { $set: { imageUrl } }
+      );
+
+      res.status(200).json({ imageUrl });
+    } catch (error) {
+      console.error("Error uploading pump image:", error);
+      res.status(500).json({ error: "An error occurred while uploading the pump image." });
+    }
+  }
+);
+
+app.get("/markers/:markerId/image", async (req, res) => {
+  try {
+    const { markerId } = req.params;
+
+    if (!ObjectId.isValid(markerId)) {
+      return res.status(400).json({ error: "Invalid marker id." });
+    }
+
+    const image = await s3Client.send(new GetObjectCommand({
+      Bucket: s3Bucket,
+      Key: `markers/${markerId}/pump-image`,
+    }));
+
+    res.set("Content-Type", image.ContentType || "application/octet-stream");
+    res.set("Cache-Control", "no-cache");
+    image.Body.pipe(res);
+  } catch (error) {
+    if (error.name === "NoSuchKey" || error.name === "NotFound") {
+      return res.status(404).json({ error: "Pump image not found." });
+    }
+
+    console.error("Error retrieving pump image:", error);
+    res.status(500).json({ error: "An error occurred while retrieving the pump image." });
   }
 });
 
