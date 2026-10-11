@@ -494,6 +494,40 @@ app.post(
   }
 );
 
+app.get("/admin/image-submissions", verifyToken, async (req, res) => {
+  try {
+    const userId = req.user.userId;
+    if (!ObjectId.isValid(userId)) {
+      return res.status(403).json({ error: "Invalid user token." });
+    }
+
+    const user = await db.collection("Users").findOne(
+      { _id: new ObjectId(userId) },
+      { projection: { isAdmin: 1 } }
+    );
+    if (!user?.isAdmin) {
+      return res.status(403).json({ error: "Admin access required." });
+    }
+
+    const submissions = await db.collection("ImageSubmissions")
+      .find({ status: "pending" })
+      .sort({ submittedAt: -1 })
+      .toArray();
+
+    res.json(submissions.map((submission) => ({
+      id: submission._id.toString(),
+      markerId: submission.markerId.toString(),
+      pumpName: submission.pumpName,
+      contributor: submission.contributor,
+      submittedAt: submission.submittedAt,
+      imageUrl: `https://${s3Bucket}.s3.${awsRegion}.amazonaws.com/${submission.s3Key}`,
+    })));
+  } catch (error) {
+    console.error("Error fetching image submissions:", error);
+    res.status(500).json({ error: "An error occurred while fetching image submissions." });
+  }
+});
+
 app.get("/markers/:markerId/image", async (req, res) => {
   try {
     const { markerId } = req.params;
