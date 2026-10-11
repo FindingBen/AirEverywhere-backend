@@ -99,6 +99,7 @@ app.post("/register", async (req, res) => {
     const newUser = {
       email: email,
       username: username,
+      isAdmin: false,
       contributionPoints: 0,
       password: hashedPassword,
     };
@@ -228,6 +229,7 @@ app.get("/me", async (req, res) => {
           username: 1,
           contributionPoints: 1,
           isAnonymous: 1,
+          isAdmin: 1,
           email: 1,
         },
       }
@@ -242,6 +244,7 @@ app.get("/me", async (req, res) => {
       username: user.username,
       contributionPoints: user.contributionPoints || 0,
       isAnonymous: Boolean(user.isAnonymous),
+      isAdmin: Boolean(user.isAdmin ?? false),
       email: user.email || null,
     });
   } catch (error) {
