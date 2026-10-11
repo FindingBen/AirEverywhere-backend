@@ -375,6 +375,10 @@ app.post(
         return res.status(404).json({ error: "Pump not found." });
       }
 
+      if (marker.imageUrl) {
+        return res.status(409).json({ error: "Updated pump photos must be submitted for approval." });
+      }
+
       const key = `markers/${markerId}/pump-image`;
       await s3Client.send(new PutObjectCommand({
         Bucket: s3Bucket,
@@ -386,13 +390,106 @@ app.post(
       const imageUrl = `/markers/${markerId}/image`;
       await markersCollection.updateOne(
         { _id: markerObjectId },
-        { $set: { imageUrl } }
+        { $set: { imageUrl, imageUpdatedAt: new Date() } }
       );
 
       res.status(200).json({ imageUrl });
     } catch (error) {
       console.error("Error uploading pump image:", error);
       res.status(500).json({ error: "An error occurred while uploading the pump image." });
+    }
+  }
+);
+
+app.post(
+  "/markers/:markerId/image-submissions",
+  verifyToken,
+  express.raw({ type: ["image/jpeg", "image/png", "image/webp"], limit: "10mb" }),
+  async (req, res) => {
+    try {
+      const { markerId } = req.params;
+      const contentType = req.headers["content-type"];
+
+      if (!ObjectId.isValid(markerId)) {
+        return res.status(400).json({ error: "Invalid marker id." });
+      }
+
+      if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+        return res.status(400).json({ error: "An image file is required." });
+      }
+
+      const userId = req.user.userId;
+      if (!ObjectId.isValid(userId)) {
+        return res.status(403).json({ error: "Invalid user token." });
+      }
+
+      const user = await db.collection("Users").findOne(
+        { _id: new ObjectId(userId) },
+        { projection: { username: 1, isAnonymous: 1 } }
+      );
+      if (!user || user.isAnonymous) {
+        return res.status(403).json({ error: "A registered account is required to submit a photo." });
+      }
+
+      const markerObjectId = new ObjectId(markerId);
+      const markersCollection = db.collection("Markers");
+      const marker = await markersCollection.findOne({ _id: markerObjectId });
+      if (!marker) {
+        return res.status(404).json({ error: "Pump not found." });
+      }
+
+      const submittedAt = new Date();
+      if (!marker.imageUrl) {
+        const key = `markers/${markerId}/pump-image`;
+        await s3Client.send(new PutObjectCommand({
+          Bucket: s3Bucket,
+          Key: key,
+          Body: req.body,
+          ContentType: contentType,
+        }));
+
+        const imageUrl = `/markers/${markerId}/image`;
+        await markersCollection.updateOne(
+          { _id: markerObjectId },
+          { $set: { imageUrl, imageUpdatedAt: submittedAt } }
+        );
+
+        return res.status(201).json({
+          message: "Pump photo added successfully.",
+          imageUrl,
+          status: "approved",
+        });
+      }
+
+      const submissionId = new ObjectId();
+      const key = `image-submissions/${submissionId.toString()}`;
+      await s3Client.send(new PutObjectCommand({
+        Bucket: s3Bucket,
+        Key: key,
+        Body: req.body,
+        ContentType: contentType,
+      }));
+
+      await db.collection("ImageSubmissions").insertOne({
+        _id: submissionId,
+        markerId: markerObjectId,
+        pumpName: marker.name,
+        contributor: user.username,
+        userId: user._id,
+        s3Key: key,
+        contentType,
+        status: "pending",
+        submittedAt,
+      });
+
+      res.status(201).json({
+        message: "Your photo is waiting for admin approval.",
+        submissionId: submissionId.toString(),
+        status: "pending",
+      });
+    } catch (error) {
+      console.error("Error submitting pump image:", error);
+      res.status(500).json({ error: "An error occurred while submitting the pump image." });
     }
   }
 );
