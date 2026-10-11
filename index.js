@@ -6,7 +6,7 @@ const path = require("path");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const cors = require("cors");
-const { S3Client, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, CopyObjectCommand, GetObjectCommand, PutObjectCommand } = require("@aws-sdk/client-s3");
 const port = process.env.PORT || 5001;
 const jwtSecret = process.env.JWT_SECRET || "your_jwt_secret";
 const jwtExpiresIn = "30d";
@@ -197,6 +197,28 @@ const verifyToken = (req, res, next) => {
     req.user = decoded; // Attach user info to the request
     next();
   });
+};
+
+const verifyAdmin = async (req, res, next) => {
+  try {
+    const userId = req.user?.userId;
+    if (!ObjectId.isValid(userId)) {
+      return res.status(403).json({ error: "Invalid user token." });
+    }
+
+    const user = await db.collection("Users").findOne(
+      { _id: new ObjectId(userId) },
+      { projection: { isAdmin: 1 } }
+    );
+    if (!user?.isAdmin) {
+      return res.status(403).json({ error: "Admin access required." });
+    }
+
+    next();
+  } catch (error) {
+    console.error("Error verifying admin access:", error);
+    res.status(500).json({ error: "An error occurred while checking admin access." });
+  }
 };
 
 const getRequestUserId = (req) => {
@@ -448,7 +470,7 @@ app.post(
           ContentType: contentType,
         }));
 
-        const imageUrl = `/markers/${markerId}/image`;
+        const imageUrl = `/markers/${markerId}/image?v=${submittedAt.getTime()}`;
         await markersCollection.updateOne(
           { _id: markerObjectId },
           { $set: { imageUrl, imageUpdatedAt: submittedAt } }
@@ -494,21 +516,8 @@ app.post(
   }
 );
 
-app.get("/admin/image-submissions", verifyToken, async (req, res) => {
+app.get("/admin/image-submissions", verifyToken, verifyAdmin, async (req, res) => {
   try {
-    const userId = req.user.userId;
-    if (!ObjectId.isValid(userId)) {
-      return res.status(403).json({ error: "Invalid user token." });
-    }
-
-    const user = await db.collection("Users").findOne(
-      { _id: new ObjectId(userId) },
-      { projection: { isAdmin: 1 } }
-    );
-    if (!user?.isAdmin) {
-      return res.status(403).json({ error: "Admin access required." });
-    }
-
     const submissions = await db.collection("ImageSubmissions")
       .find({ status: "pending" })
       .sort({ submittedAt: -1 })
@@ -525,6 +534,75 @@ app.get("/admin/image-submissions", verifyToken, async (req, res) => {
   } catch (error) {
     console.error("Error fetching image submissions:", error);
     res.status(500).json({ error: "An error occurred while fetching image submissions." });
+  }
+});
+
+app.post("/admin/image-submissions/:submissionId/review", verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const { submissionId } = req.params;
+    const { action } = req.body;
+
+    if (!ObjectId.isValid(submissionId)) {
+      return res.status(400).json({ error: "Invalid submission id." });
+    }
+    if (!["approved", "rejected"].includes(action)) {
+      return res.status(400).json({ error: "Action must be approved or rejected." });
+    }
+
+    const submissionObjectId = new ObjectId(submissionId);
+    const submissionsCollection = db.collection("ImageSubmissions");
+    const submission = await submissionsCollection.findOne({
+      _id: submissionObjectId,
+      status: "pending",
+    });
+    if (!submission) {
+      return res.status(404).json({ error: "Pending image submission not found." });
+    }
+
+    let imageUrl;
+    if (action === "approved") {
+      const markerId = submission.markerId.toString();
+      const liveKey = `markers/${markerId}/pump-image`;
+      const copySource = `${s3Bucket}/${submission.s3Key
+        .split("/")
+        .map(encodeURIComponent)
+        .join("/")}`;
+
+      await s3Client.send(new CopyObjectCommand({
+        Bucket: s3Bucket,
+        CopySource: copySource,
+        Key: liveKey,
+        ContentType: submission.contentType,
+        MetadataDirective: "REPLACE",
+      }));
+
+      const imageUpdatedAt = new Date();
+      imageUrl = `/markers/${markerId}/image?v=${imageUpdatedAt.getTime()}`;
+      await db.collection("Markers").updateOne(
+        { _id: submission.markerId },
+        { $set: { imageUrl, imageUpdatedAt } }
+      );
+    }
+
+    await submissionsCollection.updateOne(
+      { _id: submissionObjectId, status: "pending" },
+      {
+        $set: {
+          status: action,
+          reviewedAt: new Date(),
+          reviewedBy: new ObjectId(req.user.userId),
+        },
+      }
+    );
+
+    res.json({
+      message: action === "approved" ? "Photo approved." : "Photo rejected.",
+      status: action,
+      imageUrl: imageUrl || null,
+    });
+  } catch (error) {
+    console.error("Error reviewing image submission:", error);
+    res.status(500).json({ error: "An error occurred while reviewing the image submission." });
   }
 });
 
